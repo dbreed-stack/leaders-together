@@ -189,7 +189,7 @@ async function callClaudeWithTimeout(prompt, system, timeoutMs=28000){
     const r = await fetch("/api/score",{
       method:"POST", signal:controller.signal,
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, system, messages:[{role:"user",content:prompt}] }),
+      body:JSON.stringify({ model:"claude-sonnet-4-5", max_tokens:1000, system, messages:[{role:"user",content:prompt}] }),
     });
     clearTimeout(timer);
     const d = await r.json();
@@ -247,8 +247,9 @@ Return ONLY a raw JSON object (no markdown, no preamble):
       howToImprove: parsed.howToImprove || "Continue building specificity in your responses.",
       leadershipReflection: parsed.leadershipReflection || "Honest reflection is the beginning of real change.",
     };
-  } catch(e){
+ } catch(e){
     if(e.message==="API_TIMEOUT") throw e;
+    console.error("scoreQual error:", e.message, e.stack);
     return{score:2,whyScore:"Your answer showed some self-awareness.",howToImprove:"Adding specific, named examples from your experience would significantly strengthen this response.",leadershipReflection:"The gap between knowing and doing is closed one honest conversation at a time."};
   }
 }
