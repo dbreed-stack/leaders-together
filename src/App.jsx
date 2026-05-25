@@ -667,6 +667,7 @@ export default function App(){
       let qualResults=[];
       let categoryScores=[];
 
+      console.log("DEBUG surveyMode:", surveyMode);
       if(surveyMode==="self"){
         for(let ci=0;ci<CATEGORIES.length;ci++){
           const cat=CATEGORIES[ci];
