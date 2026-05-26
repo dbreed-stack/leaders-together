@@ -515,8 +515,7 @@ export default function App(){
   const scrollTop = () => {
   setTimeout(() => {
     window.scrollTo({ top: 0, behavior: "smooth" });
-    topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, 50);
+  }, 100);
 };
 
   // Restore session
