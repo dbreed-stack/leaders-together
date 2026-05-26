@@ -938,6 +938,9 @@ export default function App(){
       {screen==="auth"&&(
         <div style={S.container}>
           <div style={S.card}>
+          <div style={{background:"#FDF6EC",border:`1.5px solid ${B.warn}`,borderRadius:8,padding:"0.75rem 1rem",marginBottom:"1rem"}}>
+  <p style={{fontSize:13,color:B.charcoal,lineHeight:1.6}}>⚠ This assessment is optimized for Chrome or Firefox. Safari is not fully supported and may affect your results.</p>
+</div>
             <div style={S.h3}>{authMode==="login"?"Welcome Back":"Create Your Account"}</div>
             <h2 style={S.h2}>{authMode==="login"?"Sign in to continue your journey":"Begin your leadership baseline"}</h2>
             <div style={S.divider}/>
