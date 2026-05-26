@@ -513,9 +513,11 @@ export default function App(){
   const topRef = useRef(null);
   // v4 #4: scroll to top properly — section title and first question visible
   const scrollTop = () => {
+  setTimeout(() => {
     window.scrollTo({ top: 0, behavior: "smooth" });
     topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
+  }, 50);
+};
 
   // Restore session
   useEffect(()=>{
