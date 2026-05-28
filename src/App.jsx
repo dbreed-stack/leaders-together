@@ -891,6 +891,7 @@ const [adminResetMsg,setAdminResetMsg]     = useState("");
           {user&&!isAdmin&&(
             <>
               {user.isSupervisor&&<span style={S.badge(B.slate)}>Supervisor</span>}
+              <button onClick={()=>guardedNav("dashboard")} style={{...S.btnOutline,padding:"5px 12px",fontSize:11,color:"rgba(255,255,255,0.6)",borderColor:"rgba(255,255,255,0.25)",background:"transparent"}}>Dashboard</button>
               <button onClick={()=>guardedNav("profile",()=>{ setShowProfile(true); setEditIndustry(user.industry||""); setEditRole(user.role||""); })} style={{...S.btnOutline,padding:"5px 12px",fontSize:11,color:"rgba(255,255,255,0.6)",borderColor:"rgba(255,255,255,0.25)",background:"transparent"}}>Profile</button>
               <button onClick={()=>guardedNav("splash",signOut)} style={{...S.btnOutline,padding:"5px 12px",fontSize:11,color:"rgba(255,255,255,0.5)",borderColor:"rgba(255,255,255,0.2)",background:"transparent"}}>Sign Out</button>
             </>
