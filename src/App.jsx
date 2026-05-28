@@ -475,8 +475,14 @@ export default function App(){
 
   // Profile
   const [editIndustry,setEditIndustry] = useState("");
-  const [editRole,setEditRole]         = useState("");
-  const [showProfile,setShowProfile]   = useState(false);
+const [editRole,setEditRole]         = useState("");
+const [showProfile,setShowProfile]   = useState(false);
+const [editPassword,setEditPassword] = useState("");
+const [editNewPass,setEditNewPass]   = useState("");
+const [editConfirmPass,setEditConfirmPass] = useState("");
+const [adminResetEmail,setAdminResetEmail] = useState("");
+const [adminResetPass,setAdminResetPass]   = useState("");
+const [adminResetMsg,setAdminResetMsg]     = useState("");
 
   // Survey
   const [catIndex,setCatIndex]   = useState(0);
@@ -817,13 +823,21 @@ export default function App(){
   }
 
   async function saveProfile(){
-    if(!editIndustry.trim()||!editRole.trim()){setErr("Both fields are required."); return;}
-    const users=await dbGet("users")||{};
-    users[user.email].industry=editIndustry; users[user.email].role=editRole;
-    await dbSet("users",users);
-    setUser({...user,industry:editIndustry,role:editRole});
-    setShowProfile(false); setErr("");
+  if(!editIndustry.trim()||!editRole.trim()){setErr("Both fields are required."); return;}
+  if(editNewPass){
+    if(editNewPass.length<6){setErr("New password must be at least 6 characters."); return;}
+    if(editNewPass!==editConfirmPass){setErr("Passwords do not match."); return;}
+    if(editPassword!==user.password){setErr("Current password is incorrect."); return;}
   }
+  const users=await dbGet("users")||{};
+  users[user.email].industry=editIndustry;
+  users[user.email].role=editRole;
+  if(editNewPass) users[user.email].password=editNewPass;
+  await dbSet("users",users);
+  setUser({...user,industry:editIndustry,role:editRole,...(editNewPass?{password:editNewPass}:{})});
+  setEditPassword(""); setEditNewPass(""); setEditConfirmPass("");
+  setShowProfile(false); setErr("");
+}
 
   function signOut(){
     clearSession(); clearDraft();
@@ -896,9 +910,23 @@ export default function App(){
               <input style={S.input} value={editIndustry} onChange={e=>setEditIndustry(e.target.value)} placeholder="e.g. Dental, Physical Therapy, Optometry…"/>
             </div>
             <div style={{marginBottom:"1.25rem"}}>
-              <label style={S.label}>Your Role</label>
-              <input style={S.input} value={editRole} onChange={e=>setEditRole(e.target.value)} placeholder="e.g. Practice Manager, Office Director…"/>
-            </div>
+  <label style={S.label}>Your Role</label>
+  <input style={S.input} value={editRole} onChange={e=>setEditRole(e.target.value)} placeholder="e.g. Practice Manager, Office Director…"/>
+</div>
+<div style={{...S.divider}}/>
+<div style={{fontSize:12,color:B.stone,marginBottom:"0.75rem",lineHeight:1.6}}>To change your password, enter your current password and a new one below. Leave blank to keep your current password.</div>
+<div style={{marginBottom:"1rem"}}>
+  <label style={S.label}>Current Password</label>
+  <input style={S.input} type="password" value={editPassword} onChange={e=>setEditPassword(e.target.value)} placeholder="Your current password"/>
+</div>
+<div style={{marginBottom:"1rem"}}>
+  <label style={S.label}>New Password</label>
+  <input style={S.input} type="password" value={editNewPass} onChange={e=>setEditNewPass(e.target.value)} placeholder="New password (min 6 characters)"/>
+</div>
+<div style={{marginBottom:"1.25rem"}}>
+  <label style={S.label}>Confirm New Password</label>
+  <input style={S.input} type="password" value={editConfirmPass} onChange={e=>setEditConfirmPass(e.target.value)} placeholder="Confirm new password"/>
+</div>
             {err&&<p style={S.errTxt}>{err}</p>}
             <div style={{display:"flex",gap:10}}>
               <button style={S.btnPrimary} onClick={saveProfile}>Save Changes</button>
@@ -1461,6 +1489,21 @@ export default function App(){
                       {CATEGORIES.map((cat,ci)=><ScoreBar key={ci} label={cat.label} score={att.categoryScores[ci]} color={cat.color}/>)}
                       {att.summary&&<div style={{background:B.mist,borderRadius:8,padding:"1rem",marginTop:"1rem"}}><div style={{...S.h3,marginBottom:6}}>AI Summary</div><p style={{fontSize:13,color:B.slate,lineHeight:1.7}}>{att.summary.narrative}</p></div>}
                       <button style={{...S.btnSmall,background:B.teal,marginTop:"0.75rem"}} onClick={()=>generatePDF(att,adminTarget.name,adminTarget.industry,adminTarget.role)}>Download PDF</button>
+                      <div style={{marginTop:"1.25rem",background:B.mist,borderRadius:8,padding:"1rem"}}>
+  <div style={{...S.h3,marginBottom:"0.5rem"}}>Reset Password</div>
+  <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+    <input style={{...S.input,maxWidth:220}} type="password" value={adminResetEmail===adminTarget.email?adminResetPass:""} onChange={e=>{setAdminResetEmail(adminTarget.email);setAdminResetPass(e.target.value);setAdminResetMsg("");}} placeholder="Set new password"/>
+    <button style={S.btnSmall} onClick={async()=>{
+      if(!adminResetPass||adminResetPass.length<6){setAdminResetMsg("Min 6 characters."); return;}
+      const users=await dbGet("users")||{};
+      if(!users[adminTarget.email]){setAdminResetMsg("User not found."); return;}
+      users[adminTarget.email].password=adminResetPass;
+      await dbSet("users",users);
+      setAdminResetPass(""); setAdminResetMsg("Password reset successfully.");
+    }}>Reset</button>
+  </div>
+  {adminResetMsg&&<p style={{fontSize:12,color:adminResetMsg.includes("success")?B.teal:B.error,marginTop:6}}>{adminResetMsg}</p>}
+</div>
                     </div>
                   ))}
                 </>
