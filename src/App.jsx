@@ -964,6 +964,11 @@ export default function App(){
                 {authMode==="login"?"Create an account":"Sign in"}
               </span>
             </p>
+            {authMode==="login"&&(
+  <p style={{fontSize:12,color:B.stone,marginTop:"0.75rem",textAlign:"center",lineHeight:1.6}}>
+    Forgot your password? Email <a href="mailto:dbreed@waymarklc.com" style={{color:B.teal}}>dbreed@waymarklc.com</a> and we will reset it for you.
+  </p>
+)}
           </div>
         </div>
       )}
