@@ -1453,6 +1453,22 @@ const [adminResetMsg,setAdminResetMsg]     = useState("");
                   {adminTarget.suspended&&<span style={S.pill(B.error)}>Suspended</span>}
                 </div>
               </div>
+              <div style={{...S.card,marginBottom:"1.5rem"}}>
+  <div style={{...S.h3,marginBottom:"0.5rem"}}>Reset Password</div>
+  <p style={{fontSize:13,color:B.stone,marginBottom:"0.75rem",lineHeight:1.6}}>Set a temporary password for this participant. They can update it themselves after logging in.</p>
+  <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+    <input style={{...S.input,maxWidth:220}} type="password" value={adminResetEmail===adminTarget.email?adminResetPass:""} onChange={e=>{setAdminResetEmail(adminTarget.email);setAdminResetPass(e.target.value);setAdminResetMsg("");}} placeholder="Set new password"/>
+    <button style={S.btnSmall} onClick={async()=>{
+      if(!adminResetPass||adminResetPass.length<6){setAdminResetMsg("Min 6 characters."); return;}
+      const users=await dbGet("users")||{};
+      if(!users[adminTarget.email]){setAdminResetMsg("User not found."); return;}
+      users[adminTarget.email].password=adminResetPass;
+      await dbSet("users",users);
+      setAdminResetPass(""); setAdminResetMsg("Password reset successfully.");
+    }}>Reset</button>
+  </div>
+  {adminResetMsg&&<p style={{fontSize:12,color:adminResetMsg.includes("success")?B.teal:B.error,marginTop:6}}>{adminResetMsg}</p>}
+</div>
 
               {adminTarget.attempts.length>0&&(
                 <>
