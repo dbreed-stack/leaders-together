@@ -7,6 +7,15 @@ const redis = new Redis({
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-app-secret');
+
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
+  if (req.headers['x-app-secret'] !== process.env.APP_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
   if (req.method === 'GET') {
     const val = await redis.get(req.query.key);
     return res.json(val ?? null);
