@@ -160,9 +160,10 @@ const ADMIN_PASS  = "WaymarkAdmin2025!";
 const COHORT_CODES = ["LEADERS2025","TRIANGLE25","COHORT1"];
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-async function dbGet(key){ try{ const r=await fetch(`/api/db?key=${encodeURIComponent(key)}`); return r.ok?await r.json():null; }catch{ return null; } }
-async function dbSet(key,val){ try{ await fetch('/api/db',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key,val})}); }catch{} }
-async function dbDel(key){ try{ await fetch(`/api/db?key=${encodeURIComponent(key)}`,{method:'DELETE'}); }catch{} }
+const APP_SECRET_HEADER = { 'x-app-secret': import.meta.env.VITE_APP_SECRET };
+async function dbGet(key){ try{ const r=await fetch(`/api/db?key=${encodeURIComponent(key)}`,{headers:APP_SECRET_HEADER}); return r.ok?await r.json():null; }catch{ return null; } }
+async function dbSet(key,val){ try{ await fetch('/api/db',{method:'POST',headers:{'Content-Type':'application/json',...APP_SECRET_HEADER},body:JSON.stringify({key,val})}); }catch{} }
+async function dbDel(key){ try{ await fetch(`/api/db?key=${encodeURIComponent(key)}`,{method:'DELETE',headers:APP_SECRET_HEADER}); }catch{} }
 
 function sanitizeHTML(str){ if(!str) return ""; return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
 
