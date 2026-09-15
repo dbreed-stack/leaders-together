@@ -189,7 +189,7 @@ async function callClaudeWithTimeout(prompt, system, timeoutMs=28000){
   try {
     const r = await fetch("/api/score",{
       method:"POST", signal:controller.signal,
-      headers:{"Content-Type":"application/json"},
+      headers:{"Content-Type":"application/json",...APP_SECRET_HEADER},
       body:JSON.stringify({ model:"claude-sonnet-4-5", max_tokens:1000, system, messages:[{role:"user",content:prompt}] }),
     });
     clearTimeout(timer);
