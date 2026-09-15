@@ -156,7 +156,7 @@ const CATEGORY_PRINCIPLES = {
 };
 
 const ADMIN_EMAIL = "admin@waymarklc.com";
-const ADMIN_PASS  = "WaymarkAdmin2025!";
+
 const COHORT_CODES = ["LEADERS2025","TRIANGLE25","COHORT1"];
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
@@ -557,11 +557,12 @@ const [adminResetMsg,setAdminResetMsg]     = useState("");
   async function handleAuth(){
     setErr("");
     if(authMode==="login"){
-      if(aEmail===ADMIN_EMAIL&&aPass===ADMIN_PASS){
-        setIsAdmin(true); setUser({name:"Admin",email:ADMIN_EMAIL});
-        saveSession({email:ADMIN_EMAIL,isAdmin:true});
-        await loadAdminData(); setScreen("admin"); return;
-      }
+     const adminCheck = await fetch('/api/adminLogin',{method:'POST',headers:{'Content-Type':'application/json',...APP_SECRET_HEADER},body:JSON.stringify({email:aEmail,password:aPass})}).then(r=>r.json()).catch(()=>({ok:false}));
+if(adminCheck.ok){
+  setIsAdmin(true); setUser({name:"Admin",email:ADMIN_EMAIL});
+  saveSession({email:ADMIN_EMAIL,isAdmin:true});
+  await loadAdminData(); setScreen("admin"); return;
+}
       const users=await dbGet("users")||{};
       const u=users[aEmail];
       if(!u||u.password!==aPass){setErr("Invalid email or password."); return;}
