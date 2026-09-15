@@ -3,10 +3,14 @@ export const config = { maxDuration: 60 };
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-app-secret");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
+  }
+
+  if (req.headers['x-app-secret'] !== process.env.APP_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
@@ -24,6 +28,12 @@ export default async function handler(req, res) {
       console.error("Anthropic error:", JSON.stringify(data));
       return res.status(response.status).json(data);
     }
+    res.json(data);
+  } catch (e) {
+    console.error("Score handler exception:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+}
     res.json(data);
   } catch (e) {
     console.error("Score handler exception:", e.message);
