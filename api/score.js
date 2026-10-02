@@ -34,9 +34,3 @@ export default async function handler(req, res) {
     res.status(500).json({ error: e.message });
   }
 }
-    res.json(data);
-  } catch (e) {
-    console.error("Score handler exception:", e.message);
-    res.status(500).json({ error: e.message });
-  }
-}
