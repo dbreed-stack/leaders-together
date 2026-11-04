@@ -81,6 +81,9 @@ export function checkAdminLogin(email, pw) {
 
 // Hash any legacy plaintext passwords in place. Returns true if anything changed.
 export function migratePasswords(users) {
+  // Only migrate on production so preview deployments (which share the database)
+  // never change passwords out from under the live site.
+  if (process.env.VERCEL_ENV && process.env.VERCEL_ENV !== 'production') return false;
   let changed = false;
   for (const u of Object.values(users || {})) {
     if (u && u.password && !isHashed(u.password)) { u.password = hashPassword(u.password); changed = true; }
