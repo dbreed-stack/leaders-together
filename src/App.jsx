@@ -157,13 +157,16 @@ const CATEGORY_PRINCIPLES = {
 
 const ADMIN_EMAIL = "admin@waymarklc.com";
 
-const COHORT_CODES = ["LEADERS2025","TRIANGLE25","COHORT1"];
-
-// ─── Storage ──────────────────────────────────────────────────────────────────
-const APP_SECRET_HEADER = { 'x-app-secret': import.meta.env.VITE_APP_SECRET };
-async function dbGet(key){ try{ const r=await fetch(`/api/db?key=${encodeURIComponent(key)}`,{headers:APP_SECRET_HEADER}); return r.ok?await r.json():null; }catch{ return null; } }
-async function dbSet(key,val){ try{ await fetch('/api/db',{method:'POST',headers:{'Content-Type':'application/json',...APP_SECRET_HEADER},body:JSON.stringify({key,val})}); }catch{} }
-async function dbDel(key){ try{ await fetch(`/api/db?key=${encodeURIComponent(key)}`,{method:'DELETE',headers:APP_SECRET_HEADER}); }catch{} }
+// ─── Server API (signed-in session token; no secrets live in the browser) ──────
+function authHeader(){ const t=loadSession()?.token; return t?{Authorization:`Bearer ${t}`}:{}; }
+async function api(path, body){
+  const r = await fetch(path,{method:"POST",headers:{"Content-Type":"application/json",...authHeader()},body:JSON.stringify(body||{})});
+  let d=null; try{ d=await r.json(); }catch{ d=null; }
+  if(!r.ok){ const err=new Error(d?.error?.message||d?.error||`Request failed (${r.status})`); err.status=r.status; throw err; }
+  return d;
+}
+const authApi = (action, data={}) => api("/api/auth",{action,...data});
+const dataApi = (action, data={}) => api("/api/data",{action,...data});
 
 function sanitizeHTML(str){ if(!str) return ""; return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
 
@@ -183,23 +186,37 @@ function shortenRole(role){
 }
 
 // ─── API call with timeout ────────────────────────────────────────────────────
-async function callClaudeWithTimeout(prompt, system, timeoutMs=28000){
-  const controller = new AbortController();
-  const timer = setTimeout(()=>controller.abort(), timeoutMs);
-  try {
-    const r = await fetch("/api/score",{
-      method:"POST", signal:controller.signal,
-      headers:{"Content-Type":"application/json",...APP_SECRET_HEADER},
-      body:JSON.stringify({ model:"claude-sonnet-4-5", max_tokens:1000, system, messages:[{role:"user",content:prompt}] }),
-    });
-    clearTimeout(timer);
-    const d = await r.json();
-    return d.content?.[0]?.text || "";
-  } catch(e){
-    clearTimeout(timer);
-    if(e.name==="AbortError") throw new Error("API_TIMEOUT");
-    throw e;
+// Calls the AI through /api/score. Waits up to 55s per try (the server allows 60s),
+// treats error responses as failures instead of empty text, and retries twice.
+async function callClaudeWithTimeout(prompt, system, timeoutMs=55000, maxTokens=1000, retries=2){
+  let lastErr;
+  for(let attempt=0; attempt<=retries; attempt++){
+    const controller = new AbortController();
+    const timer = setTimeout(()=>controller.abort(), timeoutMs);
+    try {
+      const r = await fetch("/api/score",{
+        method:"POST", signal:controller.signal,
+        headers:{"Content-Type":"application/json",...authHeader()},
+        body:JSON.stringify({ max_tokens:maxTokens, system, messages:[{role:"user",content:prompt}] }),
+      });
+      clearTimeout(timer);
+      const d = await r.json().catch(()=>({}));
+      if(!r.ok || d.type==="error") throw new Error(`AI_HTTP_${r.status}: ${d.error?.type||d.error?.message||d.error||"unknown"}`);
+      if(d.stop_reason==="max_tokens") throw new Error("AI_TRUNCATED");
+      const text = d.content?.[0]?.text || "";
+      if(!text) throw new Error("Empty response");
+      extractJSON(text); // make sure it parses; otherwise retry
+      return text;
+    } catch(e){
+      clearTimeout(timer);
+      lastErr = e.name==="AbortError" ? new Error("API_TIMEOUT") : e;
+      console.error(`AI call failed (try ${attempt+1} of ${retries+1}):`, lastErr.message);
+      // Signed out or not allowed: retrying will not help.
+      if(/AI_HTTP_(400|401|403)/.test(lastErr.message)) break;
+      if(attempt<retries) await new Promise(res=>setTimeout(res, 2000*(attempt+1)));
+    }
   }
+  throw lastErr;
 }
 
 function extractJSON(raw){
@@ -249,14 +266,13 @@ Return ONLY a raw JSON object (no markdown, no preamble):
       leadershipReflection: parsed.leadershipReflection || "Honest reflection is the beginning of real change.",
     };
  } catch(e){
-    if(e.message==="API_TIMEOUT") throw e;
-    console.error("scoreQual error:", e.message, e.stack);
-    return{score:2,whyScore:"Your answer showed some self-awareness.",howToImprove:"Adding specific, named examples from your experience would significantly strengthen this response.",leadershipReflection:"The gap between knowing and doing is closed one honest conversation at a time."};
+    console.error("scoreQual error:", e.message);
+    return{failed:true,score:2,whyScore:"Your answer showed some self-awareness.",howToImprove:"Adding specific, named examples from your experience would significantly strengthen this response.",leadershipReflection:"The gap between knowing and doing is closed one honest conversation at a time."};
   }
 }
 
 // ─── UPDATED: generateSummary — behavioral language for strengths/growth ──────
-async function generateSummary(categoryScores, qualResults, userName, industry, role, isSup=false, empEmail="", supEmpName=""){
+async function generateSummary(categoryScores, qualResults, userName, industry, role, isSup=false, empEmail="", supEmpName="", throwOnFail=false){
   const shortRole = shortenRole(role);
   const displayName = isSup ? (supEmpName || empEmail) : userName;
 
@@ -273,16 +289,25 @@ Return ONLY a raw JSON object (no markdown, no preamble):
   const prompt = `${isSup?`Supervisor assessment of: ${displayName}`:`Leader: ${displayName}`}\nRole: ${shortRole} in ${industry||"general business"}\nScores:\n${scoreLines}\nQualitative depth:\n${qualLines}\n\nWrite a warm but honest 2-3 paragraph narrative. Identify top 3 behavioral strengths and top 3 specific behavioral growth opportunities. Ground all feedback in the ${industry||"industry"} context and ${shortRole} role.`;
 
   try{
-    const raw = await callClaudeWithTimeout(prompt, system, 30000);
-    return extractJSON(raw);
+    const raw = await callClaudeWithTimeout(prompt, system, 55000, 1500);
+    const parsed = extractJSON(raw);
+    if(!parsed.narrative||!Array.isArray(parsed.strengths)||!Array.isArray(parsed.growth)) throw new Error("Incomplete summary");
+    return parsed;
   } catch(e){
+    if(throwOnFail) throw e;
+    console.error("generateSummary error:", e.message);
     const sorted = categoryScores.map((s,i)=>({s,i})).sort((a,b)=>b.s-a.s);
     return{
+      failed:true,
       narrative:`${isSup?`This supervisor assessment of ${displayName}`:`${displayName}, your assessment`} reveals a leader with meaningful investment in growth. The highest-scoring areas indicate genuine capability, while the lower-scoring areas represent the clearest opportunities for development.`,
       strengths: sorted.slice(0,3).map(x=>`Shows consistent investment in ${CATEGORIES[x.i].label.toLowerCase()}`),
       growth: sorted.slice(-3).map(x=>`Has opportunity to deepen practice in ${CATEGORIES[x.i].label.toLowerCase()}`),
     };
   }
+}
+
+function isFallbackSummary(summary){
+  return !!summary&&(summary.failed===true||/reveals a leader with meaningful investment in growth/.test(summary.narrative||""));
 }
 
 function moderatedScore(avg, qualScore){
@@ -510,6 +535,7 @@ const [adminResetMsg,setAdminResetMsg]     = useState("");
   const [adminView,setAdminView]   = useState("users");
   const [adminTarget,setAdminTarget] = useState(null);
   const [supCodes,setSupCodes]     = useState([]);
+  const [regenMsg,setRegenMsg]     = useState({});
   const [modal,setModal]           = useState(null);
   const [adminLoading,setAdminLoading] = useState(false);
 
@@ -529,18 +555,20 @@ const [adminResetMsg,setAdminResetMsg]     = useState("");
   useEffect(()=>{
     (async()=>{
       const sess = loadSession();
-      if(sess?.email){
-        if(sess.isAdmin){
-          setUser({name:"Admin",email:ADMIN_EMAIL}); setIsAdmin(true);
-          await loadAdminData(); setScreen("admin");
-        } else {
-          const users = await dbGet("users")||{};
-          const u = users[sess.email];
-          if(u&&!u.suspended){ setUser(u); await loadUserData(u); setScreen("dashboard"); }
-          else if(u?.suspended){ setUser(u); setScreen("suspended"); }
-          else clearSession();
-        }
-      }
+      if(sess?.token){
+        try{
+          const me = await authApi("me");
+          if(me.isAdmin){
+            setUser(me.user); setIsAdmin(true);
+            await loadAdminData(); setScreen("admin");
+          } else {
+            const u = me.user;
+            if(u&&!u.suspended){ setUser(u); await loadUserData(u); setScreen("dashboard"); }
+            else if(u?.suspended){ setUser(u); setScreen("suspended"); }
+            else clearSession();
+          }
+        } catch { clearSession(); }
+      } else if(sess) clearSession();
       setLoading(false);
     })();
   },[]);
@@ -557,39 +585,34 @@ const [adminResetMsg,setAdminResetMsg]     = useState("");
   async function handleAuth(){
     setErr("");
     if(authMode==="login"){
-     const adminCheck = await fetch('/api/adminLogin',{method:'POST',headers:{'Content-Type':'application/json',...APP_SECRET_HEADER},body:JSON.stringify({email:aEmail,password:aPass})}).then(r=>r.json()).catch(()=>({ok:false}));
-if(adminCheck.ok){
-  setIsAdmin(true); setUser({name:"Admin",email:ADMIN_EMAIL});
-  saveSession({email:ADMIN_EMAIL,isAdmin:true});
-  await loadAdminData(); setScreen("admin"); return;
-}
-      const users=await dbGet("users")||{};
-      const u=users[aEmail];
-      if(!u||u.password!==aPass){setErr("Invalid email or password."); return;}
+      let r;
+      try{ r = await authApi("login",{email:aEmail,password:aPass}); }
+      catch(e){ setErr(e.status===401?"Invalid email or password.":(e.message||"Sign in failed.")); return; }
+      saveSession({email:r.user.email,isAdmin:!!r.isAdmin,token:r.token});
+      if(r.isAdmin){
+        setIsAdmin(true); setUser(r.user);
+        await loadAdminData(); setScreen("admin"); return;
+      }
+      const u=r.user;
       if(u.suspended){ setUser(u); setScreen("suspended"); return; }
-      saveSession({email:u.email,isAdmin:false});
       setUser(u); await loadUserData(u); setScreen("dashboard");
     } else {
       if(!aName||!aEmail||!aPass||!aIndustry||!aRole){setErr("All fields are required."); return;}
-      const users=await dbGet("users")||{};
-      if(users[aEmail]){setErr("An account with this email already exists."); return;}
-      const codes=await dbGet("supCodes")||{};
-      const codeUpper=aCode.trim().toUpperCase();
-      let tier="trial", isSupervisor=false;
-      const isSupCode = codes[codeUpper]&&!codes[codeUpper].used;
-      const isCohortCode = COHORT_CODES.includes(codeUpper);
-      if(isSupCode){ tier="cohort"; isSupervisor=true; codes[codeUpper].used=true; codes[codeUpper].usedBy=aEmail; await dbSet("supCodes",codes); }
-      else if(isCohortCode){ tier="cohort"; }
-      const u={name:aName,email:aEmail,password:aPass,tier,isSupervisor,industry:aIndustry,role:aRole,cohortCode:aCode||null,createdAt:Date.now(),suspended:false,cohort:false};
-      users[aEmail]=u; await dbSet("users",users);
-      saveSession({email:u.email,isAdmin:false});
-      setUser(u); await loadUserData(u); setScreen("dashboard");
+      let r;
+      try{ r = await authApi("signup",{name:aName,email:aEmail,password:aPass,industry:aIndustry,role:aRole,code:aCode}); }
+      catch(e){ setErr(e.message||"Sign up failed."); return; }
+      saveSession({email:r.user.email,isAdmin:false,token:r.token});
+      setUser(r.user); await loadUserData(r.user); setScreen("dashboard");
     }
   }
 
-  async function loadUserData(u){
-    const a=await dbGet(`attempts:${u.email}`)||[]; setAttempts(a);
-    if(u.isSupervisor){ const sa=await dbGet(`supAttempts:${u.email}`)||{}; setSupAttempts(sa); }
+  async function loadUserData(){
+    try{
+      const d=await dataApi("myData");
+      setAttempts(d.attempts||[]);
+      setSupAttempts(d.supAttempts||{});
+      return d;
+    }catch{ setAttempts([]); return null; }
   }
 
   function startSelf(){
@@ -654,12 +677,14 @@ if(adminCheck.ok){
   async function submitSurvey(){
     if(submitting) return;
 
-    const users = await dbGet("users")||{};
-    const freshUser = users[user?.email];
+    let fresh=null;
+    try{ fresh = await dataApi("myData"); }
+    catch(e){ if(e.status===401){ setErr("Your session expired. Please sign in again."); signOut(); return; } }
+    const freshUser = fresh?.user;
     if(freshUser?.suspended){ setUser(freshUser); clearDraft(); setScreen("suspended"); return; }
 
     if(surveyMode==="self"&&user.tier==="trial"){
-      const existing = await dbGet(`attempts:${user.email}`)||[];
+      const existing = fresh?.attempts||[];
       if(existing.length>=1){ setErr("Free trial is limited to one assessment."); setScreen("dashboard"); return; }
     }
 
@@ -729,16 +754,13 @@ if(adminCheck.ok){
         empName:surveyMode==="supervisor"?supEmpName:null,
       };
 
-      if(surveyMode==="self"){
-        const key=`attempts:${user.email}`;
-        const existing=await dbGet(key)||[];
-        existing.push(attempt); await dbSet(key,existing); setAttempts([...existing]);
-      } else {
-        const sa=await dbGet(`supAttempts:${user.email}`)||{};
-        if(!sa[supEmpEmail]) sa[supEmpEmail]=[];
-        sa[supEmpEmail].push(attempt);
-        await dbSet(`supAttempts:${user.email}`,sa); setSupAttempts({...sa});
-      }
+      // Save (retry once, so a network blip does not lose a finished assessment)
+      const saveOnce = () => dataApi("saveAttempt",{mode:surveyMode,attempt,empEmail:surveyMode==="supervisor"?supEmpEmail:null});
+      let saved;
+      try{ saved = await saveOnce(); }
+      catch(e){ if(e.status===401||e.status===403) throw e; await new Promise(r=>setTimeout(r,2000)); saved = await saveOnce(); }
+      if(surveyMode==="self") setAttempts([...(saved.attempts||[])]);
+      else setSupAttempts({...(saved.supAttempts||{})});
 
       clearDraft();
       setSubmitting(false);
@@ -753,55 +775,58 @@ if(adminCheck.ok){
   // ── Admin ──────────────────────────────────────────────────────────────────
   async function loadAdminData(){
     setAdminLoading(true);
-    const users=await dbGet("users")||{};
-    const list=Object.values(users).filter(u=>u.email!==ADMIN_EMAIL);
-    const enriched=await Promise.all(list.map(async u=>{
-      const att=await dbGet(`attempts:${u.email}`)||[];
-      const sa=u.isSupervisor?(await dbGet(`supAttempts:${u.email}`)||{}):null;
-      return{...u,attempts:att,supAttempts:sa};
-    }));
-    setAllUsers(enriched);
-    const codes=await dbGet("supCodes")||{};
-    setSupCodes(Object.entries(codes).map(([k,v])=>({code:k,...v})));
+    try{
+      const d=await dataApi("adminData");
+      setAllUsers(d.users||[]);
+      setSupCodes(Object.entries(d.codes||{}).map(([k,v])=>({code:k,...v})));
+    }catch(e){
+      if(e.status===401){ signOut(); }
+    }
     setAdminLoading(false);
   }
 
   async function genSupCode(){
-    const codes=await dbGet("supCodes")||{};
-    let newCode=genCode();
-    while(codes[newCode]) newCode=genCode();
-    codes[newCode]={created:Date.now(),used:false,usedBy:null};
-    await dbSet("supCodes",codes);
-    setSupCodes(Object.entries(codes).map(([k,v])=>({code:k,...v})));
+    const d=await dataApi("genSupCode");
+    setSupCodes(Object.entries(d.codes||{}).map(([k,v])=>({code:k,...v})));
   }
 
   async function toggleSuspend(email){
-    const users=await dbGet("users")||{};
-    if(!users[email]) return;
-    users[email].suspended=!users[email].suspended;
-    await dbSet("users",users);
+    await dataApi("toggleSuspend",{email}).catch(()=>{});
     await loadAdminData();
   }
 
   // v4 #11: toggle cohort flag (manual only)
   async function toggleCohort(email){
-    const users=await dbGet("users")||{};
-    if(!users[email]) return;
-    users[email].cohort=!users[email].cohort;
-    await dbSet("users",users);
+    await dataApi("toggleCohort",{email}).catch(()=>{});
     await loadAdminData();
   }
 
   async function deleteUser(email){
     setAdminTarget(null); setAdminView("users");
-    const users=await dbGet("users")||{};
-    const u=users[email];
-    delete users[email];
-    await dbSet("users",users);
-    await dbDel(`attempts:${email}`);
-    if(u?.isSupervisor) await dbDel(`supAttempts:${email}`);
+    await dataApi("deleteUser",{email}).catch(()=>{});
     setModal(null);
     await loadAdminData();
+  }
+
+  async function adminResetPassword(email){
+    if(!adminResetPass||adminResetPass.length<6){setAdminResetMsg("Min 6 characters."); return;}
+    try{ await dataApi("resetPassword",{email,password:adminResetPass}); setAdminResetPass(""); setAdminResetMsg("Password reset successfully."); }
+    catch(e){ setAdminResetMsg(e.message||"Reset failed."); }
+  }
+
+  // Re-run the AI summary for a saved self-assessment (uses the saved scores).
+  async function regenerateSummary(target, att){
+    setRegenMsg(m=>({...m,[att.timestamp]:"Generating…"}));
+    try{
+      const summary=await generateSummary(att.categoryScores,att.qualResults||[],target.name,target.industry,target.role,false,"","",true);
+      const d=await dataApi("updateSummary",{email:target.email,timestamp:att.timestamp,summary});
+      const updated={...target,attempts:d.attempts};
+      setAdminTarget(updated);
+      setAllUsers(list=>list.map(u=>u.email===target.email?updated:u));
+      setRegenMsg(m=>({...m,[att.timestamp]:"AI summary regenerated."}));
+    }catch(e){
+      setRegenMsg(m=>({...m,[att.timestamp]:`Could not regenerate: ${e.message}`}));
+    }
   }
 
   // v4 #11: CSV export
@@ -829,14 +854,11 @@ if(adminCheck.ok){
   if(editNewPass){
     if(editNewPass.length<6){setErr("New password must be at least 6 characters."); return;}
     if(editNewPass!==editConfirmPass){setErr("Passwords do not match."); return;}
-    if(editPassword!==user.password){setErr("Current password is incorrect."); return;}
   }
-  const users=await dbGet("users")||{};
-  users[user.email].industry=editIndustry;
-  users[user.email].role=editRole;
-  if(editNewPass) users[user.email].password=editNewPass;
-  await dbSet("users",users);
-  setUser({...user,industry:editIndustry,role:editRole,...(editNewPass?{password:editNewPass}:{})});
+  let r;
+  try{ r=await authApi("updateProfile",{industry:editIndustry,role:editRole,currentPassword:editPassword,newPassword:editNewPass||""}); }
+  catch(e){ setErr(e.message||"Could not save changes."); return; }
+  setUser(r.user);
   setEditPassword(""); setEditNewPass(""); setEditConfirmPass("");
   setShowProfile(false); setErr("");
 }
@@ -1461,14 +1483,7 @@ if(adminCheck.ok){
   <p style={{fontSize:13,color:B.stone,marginBottom:"0.75rem",lineHeight:1.6}}>Set a temporary password for this participant. They can update it themselves after logging in.</p>
   <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
     <input style={{...S.input,maxWidth:220}} type="password" value={adminResetEmail===adminTarget.email?adminResetPass:""} onChange={e=>{setAdminResetEmail(adminTarget.email);setAdminResetPass(e.target.value);setAdminResetMsg("");}} placeholder="Set new password"/>
-    <button style={S.btnSmall} onClick={async()=>{
-      if(!adminResetPass||adminResetPass.length<6){setAdminResetMsg("Min 6 characters."); return;}
-      const users=await dbGet("users")||{};
-      if(!users[adminTarget.email]){setAdminResetMsg("User not found."); return;}
-      users[adminTarget.email].password=adminResetPass;
-      await dbSet("users",users);
-      setAdminResetPass(""); setAdminResetMsg("Password reset successfully.");
-    }}>Reset</button>
+    <button style={S.btnSmall} onClick={()=>adminResetPassword(adminTarget.email)}>Reset</button>
   </div>
   {adminResetMsg&&<p style={{fontSize:12,color:adminResetMsg.includes("success")?B.teal:B.error,marginTop:6}}>{adminResetMsg}</p>}
 </div>
@@ -1507,19 +1522,19 @@ if(adminCheck.ok){
                       </div>
                       {CATEGORIES.map((cat,ci)=><ScoreBar key={ci} label={cat.label} score={att.categoryScores[ci]} color={cat.color}/>)}
                       {att.summary&&<div style={{background:B.mist,borderRadius:8,padding:"1rem",marginTop:"1rem"}}><div style={{...S.h3,marginBottom:6}}>AI Summary</div><p style={{fontSize:13,color:B.slate,lineHeight:1.7}}>{att.summary.narrative}</p></div>}
+                      {isFallbackSummary(att.summary)&&(
+                        <div style={{marginTop:"0.75rem",display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                          <span style={{fontSize:12,color:B.error}}>This summary is the generic fallback (the AI call failed).</span>
+                          <button style={{...S.btnSmall,background:B.navy}} disabled={regenMsg[att.timestamp]==="Generating…"} onClick={()=>regenerateSummary(adminTarget,att)}>Regenerate AI Summary</button>
+                        </div>
+                      )}
+                      {regenMsg[att.timestamp]&&<p style={{fontSize:12,color:/regenerated/.test(regenMsg[att.timestamp])?B.teal:B.stone,marginTop:6}}>{regenMsg[att.timestamp]}</p>}
                       <button style={{...S.btnSmall,background:B.teal,marginTop:"0.75rem"}} onClick={()=>generatePDF(att,adminTarget.name,adminTarget.industry,adminTarget.role)}>Download PDF</button>
                       <div style={{marginTop:"1.25rem",background:B.mist,borderRadius:8,padding:"1rem"}}>
   <div style={{...S.h3,marginBottom:"0.5rem"}}>Reset Password</div>
   <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
     <input style={{...S.input,maxWidth:220}} type="password" value={adminResetEmail===adminTarget.email?adminResetPass:""} onChange={e=>{setAdminResetEmail(adminTarget.email);setAdminResetPass(e.target.value);setAdminResetMsg("");}} placeholder="Set new password"/>
-    <button style={S.btnSmall} onClick={async()=>{
-      if(!adminResetPass||adminResetPass.length<6){setAdminResetMsg("Min 6 characters."); return;}
-      const users=await dbGet("users")||{};
-      if(!users[adminTarget.email]){setAdminResetMsg("User not found."); return;}
-      users[adminTarget.email].password=adminResetPass;
-      await dbSet("users",users);
-      setAdminResetPass(""); setAdminResetMsg("Password reset successfully.");
-    }}>Reset</button>
+    <button style={S.btnSmall} onClick={()=>adminResetPassword(adminTarget.email)}>Reset</button>
   </div>
   {adminResetMsg&&<p style={{fontSize:12,color:adminResetMsg.includes("success")?B.teal:B.error,marginTop:6}}>{adminResetMsg}</p>}
 </div>
